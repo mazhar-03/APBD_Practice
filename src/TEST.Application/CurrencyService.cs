@@ -16,22 +16,22 @@ public class CurrencyService : ICurrencyService
     {
         using (var connection = new SqlConnection(_connectionString))
         {
-            string query = "SELECT COUNT(1) FROM Country WHERE Name = @CountryName";
+            var query = "SELECT COUNT(1) FROM Country WHERE Name = @CountryName";
             var command = new SqlCommand(query, connection);
             command.Parameters.AddWithValue("@CountryName", countryName);
-            
+
             connection.Open();
             var result = (int)command.ExecuteScalar();
             return result > 0;
         }
     }
-    
+
     public bool CurrencyExists(string currencyName)
     {
         using (var connection = new SqlConnection(_connectionString))
         {
             connection.Open();
-            string query = "SELECT COUNT(1) FROM Currency WHERE Name = @CurrencyName";
+            var query = "SELECT COUNT(1) FROM Currency WHERE Name = @CurrencyName";
 
             using (var cmd = new SqlCommand(query, connection))
             {
@@ -64,7 +64,6 @@ public class CurrencyService : ICurrencyService
                             Name = reader["CurrencyName"].ToString(),
                             Rate = (float)Convert.ToDouble(reader["CurrencyRate"])
                         });
-
             }
             finally
             {
@@ -94,10 +93,92 @@ public class CurrencyService : ICurrencyService
             connection.Open();
             using (var reader = command.ExecuteReader())
             {
-                while (reader.Read()) countries.Add(reader["CountryName"].ToString());
+                while (reader.Read())
+                    countries.Add(reader["CountryName"].ToString());
             }
         }
 
         return countries;
+    }
+
+    public bool UpdateCurrency(CurrencyRequestDto request)
+    {
+        using (var connection = new SqlConnection(_connectionString))
+        {
+            // Check if all countries exist in the database
+            foreach (var country in request.Countries)
+                if (!CountryExists(country))
+                    return false; // If any country doesn't exist, return false
+
+            var updateQuery = @"UPDATE Currency SET Rate = @CurrencyRate WHERE Name = @CurrencyName";
+            var updateCommand = new SqlCommand(updateQuery, connection);
+            updateCommand.Parameters.AddWithValue("@CurrencyName", request.CurrencyName);
+            updateCommand.Parameters.AddWithValue("@CurrencyRate", request.CurrencyRate);
+
+            connection.Open();
+            updateCommand.ExecuteNonQuery();
+
+            // Update Currency-Country associations
+            // First, remove old associations
+            var deleteQuery =
+                "DELETE FROM CurrencyCountry WHERE CurrencyId = (SELECT Id FROM Currency WHERE Name = @CurrencyName)";
+            var deleteCommand = new SqlCommand(deleteQuery, connection);
+            deleteCommand.Parameters.AddWithValue("@CurrencyName", request.CurrencyName);
+            deleteCommand.ExecuteNonQuery();
+
+
+            foreach (var country in request.Countries)
+            {
+                var insertQuery = @"
+                    INSERT INTO CurrencyCountry (CurrencyId, CountryId)
+                    SELECT 
+                        (SELECT Id FROM Currency WHERE Name = @CurrencyName),
+                        (SELECT Id FROM Country WHERE Name = @CountryName)";
+                var insertCommand = new SqlCommand(insertQuery, connection);
+                insertCommand.Parameters.AddWithValue("@CurrencyName", request.CurrencyName);
+                insertCommand.Parameters.AddWithValue("@CountryName", country);
+                insertCommand.ExecuteNonQuery();
+            }
+
+            return true;
+        }
+    }
+
+    public bool CreateCurrency(CurrencyRequestDto request)
+    {
+        using (var connection = new SqlConnection(_connectionString))
+        {
+            foreach (var country in request.Countries)
+            {
+                if(!CountryExists(country))
+                    return false;
+            }
+            
+            var insertQuery = @"
+                INSERT INTO Currency (Name, Rate)
+                VALUES (@CurrencyName, @CurrencyRate)";
+            
+            var insertCommand = new SqlCommand(insertQuery, connection);
+            insertCommand.Parameters.AddWithValue("@CurrencyName", request.CurrencyName);
+            insertCommand.Parameters.AddWithValue("@CurrencyRate", request.CurrencyRate);
+            connection.Open();
+            insertCommand.ExecuteNonQuery();
+            
+            // Get the newly created CurrencyId
+            var getCurrencyIdQuery = "SELECT Id FROM Currency WHERE Name = @CurrencyName";
+            var getCurrencyIdCommand = new SqlCommand(getCurrencyIdQuery, connection);
+            getCurrencyIdCommand.Parameters.AddWithValue("@CurrencyName", request.CurrencyName);
+            var currencyId = (int)getCurrencyIdCommand.ExecuteScalar();
+
+            foreach (var country in request.Countries)
+            {
+                var insertCountryQuery = @"INSERT INTO Currency_Country (Currency_Id, Country_Id)
+                                           VALUES (@CurrencyId, SELECT Id FROM Country WHERE Name = @CountryName)";
+                var insertCountryCommand = new SqlCommand(insertCountryQuery, connection);
+                insertCountryCommand.Parameters.AddWithValue("@CurrencyId", currencyId);
+                insertCountryCommand.Parameters.AddWithValue("@CountryName", country);
+            }
+            return true;
+        }
     }
 }
